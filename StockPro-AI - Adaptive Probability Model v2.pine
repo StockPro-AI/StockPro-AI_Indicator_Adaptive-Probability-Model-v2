@@ -24,6 +24,22 @@ showTable       = input.bool(true, "Show Table")
 uiPosition = input.string("Top Right", "Table Position", options = ["Top Left", "Top Right", "Bottom Left", "Bottom Right", "Top Center", "Bottom Center"])
 uiSize     = input.string("Medium", "Table Size", options = ["Small", "Medium", "Large"])
 
+// Signal controls
+signalMode   = input.string("Both", "Signal Mode", options = ["Both", "Long only", "Short only", "None"])
+showSignals  = input.bool(true, "Show Signal Arrows")
+enableAlerts = input.bool(true, "Enable Alerts")
+confirmOnClose = input.bool(true, "Signal Only On Bar Close")
+
+longBiasMin  = input.float(60.0, "Long: Min Long %", minval = 0.0, maxval = 100.0, step = 0.5)
+longBiasMax  = input.float(40.0, "Long: Max Short %", minval = 0.0, maxval = 100.0, step = 0.5)
+shortBiasMin = input.float(60.0, "Short: Min Short %", minval = 0.0, maxval = 100.0, step = 0.5)
+shortBiasMax = input.float(40.0, "Short: Max Long %", minval = 0.0, maxval = 100.0, step = 0.5)
+minConfidence = input.float(70.0, "Min Confidence %", minval = 0.0, maxval = 100.0, step = 0.5)
+minAccuracy   = input.float(55.0, "Min Accuracy %", minval = 0.0, maxval = 100.0, step = 0.5)
+
+showLongColorPick  = input.color(color.lime, "Long Arrow Color")
+showShortColorPick = input.color(color.red, "Short Arrow Color")
+
 f_table_position(pos) =>
     switch pos
         "Top Left"      => position.top_left
@@ -174,7 +190,21 @@ downPct = 100 - upPct
 statusText = isReady ? (trendRegime ? "READY / TREND" : "READY / RANGE") : "WARMUP"
 
 // =============================
-// 7) TABLE
+// 7) SIGNAL LOGIC
+// =============================
+barOk = confirmOnClose ? barstate.isconfirmed : true
+tradeModeAllowsLong = signalMode == "Both" or signalMode == "Long only"
+tradeModeAllowsShort = signalMode == "Both" or signalMode == "Short only"
+
+longSignalCore = isReady and barOk and tradeModeAllowsLong and upPct >= longBiasMin and downPct <= longBiasMax and confidence * 100.0 >= minConfidence and quality * 100.0 >= minAccuracy
+shortSignalCore = isReady and barOk and tradeModeAllowsShort and downPct >= shortBiasMin and upPct <= shortBiasMax and confidence * 100.0 >= minConfidence and quality * 100.0 >= minAccuracy
+
+// one-shot signals per bar
+longSignal = longSignalCore and not shortSignalCore
+shortSignal = shortSignalCore and not longSignalCore
+
+// =============================
+// 8) TABLE
 // =============================
 var table t = table.new(uiPos, 2, 6, border_width = 2, border_color = color.rgb(90, 90, 90), frame_width = 2, frame_color = color.rgb(90, 90, 90))
 
@@ -204,7 +234,13 @@ if showTable and barstate.islast
     table.cell(t, 1, 5, na(accuracyEma) ? "n/a" : str.tostring(math.round(accuracyEma * 100.0)) + "%", bgcolor = panelBg, text_color = color.white, text_size = size.huge, width = cellW, height = cellH)
 
 // =============================
-// 8) VISUALS
+// 9) VISUALS + ALERTS
 // =============================
 plot(probUp, title = "Probability Up", linewidth = 2, color = color.new(color.lime, 0))
 plot(1.0 - probUp, title = "Probability Down", linewidth = 2, color = color.new(color.red, 0))
+
+plotshape(showSignals and longSignal, title = "Long Signal", style = shape.arrowup, location = location.belowbar, color = showLongColorPick, size = size.small, text = "LONG", textcolor = color.white)
+plotshape(showSignals and shortSignal, title = "Short Signal", style = shape.arrowdown, location = location.abovebar, color = showShortColorPick, size = size.small, text = "SHORT", textcolor = color.white)
+
+alertcondition(enableAlerts and longSignal, title = "StockPro-AI Long Signal", message = "StockPro-AI - Adaptive Probability Model v2: LONG signal")
+alertcondition(enableAlerts and shortSignal, title = "StockPro-AI Short Signal", message = "StockPro-AI - Adaptive Probability Model v2: SHORT signal")
