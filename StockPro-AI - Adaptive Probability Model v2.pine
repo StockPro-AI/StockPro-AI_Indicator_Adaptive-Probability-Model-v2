@@ -1,0 +1,210 @@
+// StockPro-AI - Adaptive Probability Model v2
+// Adaptive Probability Indicator v2 (Self-Calibrating, Anti-Overfit)
+// Pine Script v6
+//@version=6
+indicator("StockPro-AI - Adaptive Probability Model v2", overlay=true, max_labels_count=500)
+
+// =============================
+// 1) INPUTS
+// =============================
+lookahead       = input.int(10,  "Prediction Horizon (bars)", minval = 1)
+trainWindow     = input.int(300, "Training Window", minval = 20)
+learningRate    = input.float(0.03, "Learning Rate", step = 0.01, minval = 0.001)
+rsiLen          = input.int(14,  "RSI Length", minval = 1)
+emaFastLen      = input.int(20,  "EMA Fast", minval = 1)
+emaSlowLen      = input.int(50,  "EMA Slow", minval = 1)
+macdFastLen     = input.int(12,  "MACD Fast", minval = 1)
+macdSlowLen     = input.int(26,  "MACD Slow", minval = 1)
+macdSignalLen   = input.int(9,   "MACD Signal", minval = 1)
+atrLen          = input.int(14,  "ATR Length", minval = 1)
+regimeThreshold = input.float(0.75, "Trend Regime Threshold (EMA spread / ATR)", step = 0.05, minval = 0.10)
+showTable       = input.bool(true, "Show Table")
+
+// Table layout controls
+uiPosition = input.string("Top Right", "Table Position", options = ["Top Left", "Top Right", "Bottom Left", "Bottom Right", "Top Center", "Bottom Center"])
+uiSize     = input.string("Medium", "Table Size", options = ["Small", "Medium", "Large"])
+
+f_table_position(pos) =>
+    switch pos
+        "Top Left"      => position.top_left
+        "Top Right"     => position.top_right
+        "Bottom Left"   => position.bottom_left
+        "Bottom Right"  => position.bottom_right
+        "Top Center"    => position.top_center
+        "Bottom Center" => position.bottom_center
+        => position.top_right
+
+f_text_size(sz) =>
+    switch sz
+        "Small"  => size.small
+        "Medium" => size.normal
+        "Large"  => size.large
+        => size.normal
+
+f_cell_w(sz) =>
+    switch sz
+        "Small"  => 4
+        "Medium" => 6
+        "Large"  => 8
+        => 6
+
+f_cell_h(sz) =>
+    switch sz
+        "Small"  => 3
+        "Medium" => 5
+        "Large"  => 7
+        => 5
+
+uiPos  = f_table_position(uiPosition)
+uiText = f_text_size(uiSize)
+cellW  = f_cell_w(uiSize)
+cellH  = f_cell_h(uiSize)
+
+// =============================
+// 2) CORE FEATURES
+// =============================
+rsi      = ta.rsi(close, rsiLen)
+emaFast  = ta.ema(close, emaFastLen)
+emaSlow  = ta.ema(close, emaSlowLen)
+atr      = ta.atr(atrLen)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFastLen, macdSlowLen, macdSignalLen)
+
+emaDiff  = emaFast - emaSlow
+macdDiff = macdLine - macdSignal
+trendStrength = atr > 0.0 ? math.abs(emaDiff) / atr : 0.0
+trendRegime   = trendStrength >= regimeThreshold
+
+// Normalize features
+rsiNorm  = (rsi - 50.0) / 50.0
+emaNorm  = atr > 0.0 ? emaDiff / atr : 0.0
+macdNorm = atr > 0.0 ? macdDiff / atr : 0.0
+
+// Safety: do not train or score until all core series are ready.
+warmupBars = math.max(lookahead + 1, math.max(math.max(rsiLen, atrLen), math.max(emaSlowLen, macdSlowLen + macdSignalLen)) + 5)
+isReady = bar_index >= warmupBars and not na(rsi) and not na(emaFast) and not na(emaSlow) and not na(atr) and not na(macdLine) and not na(macdSignal)
+
+// =============================
+// 3) MODEL (ONLINE LOGISTIC REGRESSION)
+// =============================
+var float w_rsi  = 0.0
+var float w_ema  = 0.0
+var float w_macd = 0.0
+var float bias   = 0.0
+
+sigmoid(x) => 1.0 / (1.0 + math.exp(-x))
+clamp01(x) => math.max(0.0, math.min(1.0, x))
+clampScore(x) => math.max(-10.0, math.min(10.0, x))
+
+// Use neutral output until the model is warmed up.
+rawScore = isReady ? clampScore(w_rsi * rsiNorm + w_ema * emaNorm + w_macd * macdNorm + bias) : 0.0
+probUp   = isReady ? sigmoid(rawScore) : 0.5
+
+// =============================
+// 4) BUFFER FOR DELAYED LEARNING
+// =============================
+var array<float> buf_rsi  = array.new_float()
+var array<float> buf_ema  = array.new_float()
+var array<float> buf_macd = array.new_float()
+var array<float> buf_prob = array.new_float()
+
+if isReady
+    array.push(buf_rsi, rsiNorm)
+    array.push(buf_ema, emaNorm)
+    array.push(buf_macd, macdNorm)
+    array.push(buf_prob, probUp)
+
+    // Keep only a bounded rolling window to reduce memory use and overfit risk.
+    maxBuffer = math.max(trainWindow, lookahead + 1)
+    while array.size(buf_prob) > maxBuffer
+        array.shift(buf_rsi)
+        array.shift(buf_ema)
+        array.shift(buf_macd)
+        array.shift(buf_prob)
+
+// =============================
+// 5) DELAYED LEARNING
+// =============================
+var int samples = 0
+var float accuracyEma = na
+alphaAcc = 2.0 / (trainWindow + 1.0)
+
+canLearn = isReady and array.size(buf_prob) > lookahead
+if canLearn
+    idx = array.size(buf_prob) - lookahead - 1
+
+    pastProb = array.get(buf_prob, idx)
+    pastRsi  = array.get(buf_rsi, idx)
+    pastEma  = array.get(buf_ema, idx)
+    pastMacd = array.get(buf_macd, idx)
+
+    // True delayed label: did price rise over the prediction horizon?
+    labelUp = close > close[lookahead] ? 1.0 : 0.0
+    error   = labelUp - pastProb
+
+    // Online gradient update with small learning rate and hard clipping.
+    w_rsi  += learningRate * error * pastRsi
+    w_ema  += learningRate * error * pastEma
+    w_macd += learningRate * error * pastMacd
+    bias   += learningRate * error
+
+    w_rsi  := math.max(-2.0, math.min(2.0, w_rsi))
+    w_ema  := math.max(-2.0, math.min(2.0, w_ema))
+    w_macd := math.max(-2.0, math.min(2.0, w_macd))
+    bias   := math.max(-2.0, math.min(2.0, bias))
+
+    predClass = pastProb >= 0.5 ? 1.0 : 0.0
+    hit = predClass == labelUp ? 1.0 : 0.0
+    samples += 1
+    accuracyEma := na(accuracyEma) ? hit : accuracyEma * (1.0 - alphaAcc) + hit * alphaAcc
+
+// =============================
+// 6) CONFIDENCE / QUALITY
+// =============================
+coverage = clamp01(samples / trainWindow)
+quality  = na(accuracyEma) ? 0.0 : clamp01(accuracyEma)
+confidence = isReady ? clamp01(0.55 * coverage + 0.45 * quality) : 0.0
+
+// Regime-aware confidence dampening in choppy markets.
+regimeBoost = clamp01(trendStrength / math.max(0.0001, regimeThreshold))
+confidence := confidence * (0.70 + 0.30 * regimeBoost)
+
+upPct   = isReady ? math.round(probUp * 100.0) : 50
+downPct = 100 - upPct
+
+statusText = isReady ? (trendRegime ? "READY / TREND" : "READY / RANGE") : "WARMUP"
+
+// =============================
+// 7) TABLE
+// =============================
+var table t = table.new(uiPos, 2, 6, border_width = 2, border_color = color.rgb(90, 90, 90), frame_width = 2, frame_color = color.rgb(90, 90, 90))
+
+if showTable and barstate.islast
+    headerBg = color.rgb(45, 45, 45)
+    bullBg   = upPct >= 60 ? color.rgb(16, 110, 70) : upPct >= 30 ? color.rgb(40, 90, 60) : color.rgb(70, 70, 70)
+    bearBg   = downPct >= 60 ? color.rgb(150, 40, 40) : downPct >= 30 ? color.rgb(110, 55, 55) : color.rgb(70, 70, 70)
+    infoBg   = trendRegime ? color.rgb(40, 70, 120) : color.rgb(70, 70, 70)
+    panelBg  = color.rgb(28, 28, 28)
+
+    table.cell(t, 0, 0, "Metric", bgcolor = headerBg, text_color = color.white, text_size = uiText, width = cellW, height = cellH)
+    table.cell(t, 1, 0, "Value",  bgcolor = headerBg, text_color = color.white, text_size = uiText, width = cellW, height = cellH)
+
+    table.cell(t, 0, 1, "Status", bgcolor = infoBg, text_color = color.white, text_size = uiText, width = cellW, height = cellH)
+    table.cell(t, 1, 1, statusText, bgcolor = infoBg, text_color = color.white, text_size = uiText, width = cellW, height = cellH)
+
+    table.cell(t, 0, 2, "UP", bgcolor = bullBg, text_color = color.white, text_size = uiText, width = cellW, height = cellH)
+    table.cell(t, 1, 2, isReady ? (str.tostring(upPct) + "%") : "n/a", bgcolor = bullBg, text_color = color.white, text_size = size.huge, width = cellW, height = cellH)
+
+    table.cell(t, 0, 3, "DOWN", bgcolor = bearBg, text_color = color.white, text_size = uiText, width = cellW, height = cellH)
+    table.cell(t, 1, 3, isReady ? (str.tostring(downPct) + "%") : "n/a", bgcolor = bearBg, text_color = color.white, text_size = size.huge, width = cellW, height = cellH)
+
+    table.cell(t, 0, 4, "Confidence", bgcolor = panelBg, text_color = color.white, text_size = uiText, width = cellW, height = cellH)
+    table.cell(t, 1, 4, isReady ? (str.tostring(math.round(confidence * 100.0)) + "%") : "n/a", bgcolor = panelBg, text_color = color.white, text_size = size.huge, width = cellW, height = cellH)
+
+    table.cell(t, 0, 5, "Accuracy", bgcolor = panelBg, text_color = color.white, text_size = uiText, width = cellW, height = cellH)
+    table.cell(t, 1, 5, na(accuracyEma) ? "n/a" : str.tostring(math.round(accuracyEma * 100.0)) + "%", bgcolor = panelBg, text_color = color.white, text_size = size.huge, width = cellW, height = cellH)
+
+// =============================
+// 8) VISUALS
+// =============================
+plot(probUp, title = "Probability Up", linewidth = 2, color = color.new(color.lime, 0))
+plot(1.0 - probUp, title = "Probability Down", linewidth = 2, color = color.new(color.red, 0))
