@@ -1,7 +1,7 @@
 # 🤖 StockPro-AI - Adaptive Probability Model v2
 
 > **KI-gestützter, adaptiver Wahrscheinlichkeits-Indikator für TradingView**  
-> Self-calibrating Pine Script v6 model with delayed online learning, configurable signals, and anti-overfit safeguards.
+> Self-calibrating Pine Script v6 model with delayed online learning, configurable signals, strategy support, and anti-overfit safeguards.
 
 [![GitHub stars](https://img.shields.io/github/stars/StockPro-AI/StockPro-AI_Indicator_Adaptive-Probability-Model-v2?style=social)](https://github.com/StockPro-AI/StockPro-AI_Indicator_Adaptive-Probability-Model-v2)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -18,6 +18,7 @@
 - 🌐 **Trend / Range Awareness** – regime detection to dampen weak conditions
 - 🎛️ **Flexible UI Controls** – table size, table position, colors, and display options
 - 🚨 **Optional Signal Engine** – arrows, alerts, direction filters, and configurable thresholds
+- 📈 **Strategy Version** – entry/exit logic, SL/TP, session filter, and signal throttling
 
 ---
 
@@ -27,8 +28,10 @@
 
 1. Öffne TradingView.
 2. Erstelle ein neues Pine Script.
-3. Füge den Inhalt von `StockPro-AI - Adaptive Probability Model v2.pine` ein.
-4. Speichere und füge den Indikator dem Chart hinzu.
+3. Füge den Inhalt der gewünschten Datei ein:
+   - `StockPro-AI - Adaptive Probability Model v2.pine`
+   - `StockPro-AI - Adaptive Probability Strategy v1.pine`
+4. Speichere und füge den Indikator bzw. die Strategy dem Chart hinzu.
 
 ### 2) Standard-Einstellungen prüfen
 
@@ -38,6 +41,8 @@ Empfohlene Startwerte:
 - **Learning Rate:** 0.03
 - **Min Confidence:** 70%
 - **Min Accuracy:** 55%
+- **Signal Cooldown:** 5 Bars
+- **Max Signals per Trade:** 3
 
 ### 3) Signale aktivieren
 
@@ -52,6 +57,8 @@ Zusätzlich lassen sich:
 - Alerts ein- / ausschalten
 - Farben individuell anpassen
 - Signal nur auf Bar Close bestätigen
+- Signal-Cooldown pro Richtung setzen
+- Maximalzahl an Signalen pro Trade begrenzen
 
 ---
 
@@ -67,6 +74,13 @@ Der Indikator kombiniert drei normalisierte Kernsignale:
 | ATR-Normalisierung | Stabilität über Volatilitätsregime hinweg |
 
 Die Wahrscheinlichkeit entsteht über ein kleines **Online-Logit-Modell**. Eine Vorhersage wird gespeichert, später mit dem Marktverlauf verglichen und danach zur Gewichtsanpassung verwendet.
+
+Die Strategy-Datei verwendet dieselbe Logik, ergänzt aber:
+- Entry / Exit-Management
+- Stop Loss / Take Profit auf ATR-Basis
+- Session-Filter
+- Signalbegrenzung je Trade und Richtung
+- Reversal-Handling
 
 ---
 
@@ -111,13 +125,16 @@ Ein Short-Signal wird nur erzeugt, wenn alle Bedingungen erfüllt sind:
 - **Signal Only On Bar Close**: on / off
 - **Arrow Colors**: frei wählbar
 
-### Threshold Settings
-- **Long Min Long %**
-- **Long Max Short %**
-- **Short Min Short %**
-- **Short Max Long %**
-- **Min Confidence %**
-- **Min Accuracy %**
+### Strategy Settings
+- **Trade Mode**: Both, Long only, Short only, None
+- **Signal Behavior**: Single entry oder Scale-in
+- **Min Bars Between Signals**
+- **Max Long Signals per Trade**
+- **Max Short Signals per Trade**
+- **Use Session Filter**
+- **Trading Session**
+- **Stop Loss ATR Multiplier**
+- **Take Profit ATR Multiplier**
 
 ---
 
@@ -127,7 +144,8 @@ Ein Short-Signal wird nur erzeugt, wenn alle Bedingungen erfüllt sind:
 StockPro-AI_Indicator_Adaptive-Probability-Model-v2/
 ├── README.md
 ├── LICENSE
-└── StockPro-AI - Adaptive Probability Model v2.pine
+├── StockPro-AI - Adaptive Probability Model v2.pine
+└── StockPro-AI - Adaptive Probability Strategy v1.pine
 ```
 
 ---
@@ -144,9 +162,10 @@ StockPro-AI_Indicator_Adaptive-Probability-Model-v2/
 
 ## 📝 Important Notes
 
-- Der Indikator ist ein Analyse- und Entscheidungswerkzeug, kein Garant für Marktbewegungen.
+- Der Indikator und die Strategy sind Analyse- und Entscheidungswerkzeuge, kein Garant für Marktbewegungen.
 - Historische Trefferquoten sind keine Garantie für zukünftige Ergebnisse.
 - Die Signal-Logik ist absichtlich konfigurierbar, damit du sie an Markt und Timeframe anpassen kannst.
+- Die Strategy-Datei ist für Backtesting gedacht und sollte vor echtem Einsatz auf mehreren Symbolen geprüft werden.
 
 ---
 
@@ -155,7 +174,7 @@ StockPro-AI_Indicator_Adaptive-Probability-Model-v2/
 - Higher-timeframe regime filter
 - Separate trend / range sub-models
 - Better calibration scoring
-- Strategy version based on the indicator logic
+- Signal cooldown pro Richtung dynamisch adaptiv
 - Exportable signal logs for backtesting
 
 ---
